@@ -1,0 +1,526 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ロケット回路クイズ</title>
+<style>
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+
+body{
+  font-family:sans-serif;
+  max-width:760px;
+  margin:20px auto;
+  padding:16px;
+  background:#eef7ff;
+  color:#24324a;
+}
+h1{text-align:center}
+#game{
+  background:#fff;
+  padding:18px;
+  border-radius:18px;
+  box-shadow:0 4px 14px #aac4d866;
+}
+#track{
+  height:105px;
+  position:relative;
+  overflow:hidden;
+  border-radius:12px;
+  background:linear-gradient(#162c55 0 73%,#aedcff 73%);
+}
+.star{position:absolute;color:#fff}
+#rocket{
+  position:absolute;
+  left:2%;
+  bottom:9px;
+  font-size:40px;
+  z-index:3;
+  transform:rotate(-45deg);
+  transition:left .6s cubic-bezier(.2,.8,.3,1.2);
+}
+#goal{
+  position:absolute;
+  right:8px;
+  bottom:7px;
+  font-size:37px;
+}
+.obstacle{
+  position:absolute;
+  bottom:8px;
+  font-size:32px;
+  z-index:2;
+  transition:opacity .5s,transform .5s;
+}
+.obstacle.gone{
+  opacity:0;
+  transform:translateY(-30px) rotate(180deg);
+  pointer-events:none;
+}
+#stage{
+  text-align:center;
+  font-weight:bold;
+  color:#42638f;
+}
+#diagram{
+  height:220px;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+}
+#question,#explain{
+  font-size:17px;
+  line-height:1.8;
+}
+input,button{
+  font-size:17px;
+  padding:9px;
+  border-radius:9px;
+}
+input{
+  width:180px;
+  border:2px solid #b7c7e3;
+}
+button{
+  border:0;
+  background:#597bd5;
+  color:#fff;
+  font-weight:bold;
+  cursor:pointer;
+  margin:2px;
+}
+button:disabled{
+  background:#aab5cc;
+  cursor:not-allowed;
+}
+#resetButton{background:#e77a45}
+#message{
+  font-weight:bold;
+  margin:10px 0;
+}
+#explain{
+  background:#f1f6ff;
+  border-radius:10px;
+  padding:10px;
+}
+.correct{
+  background:#daf8e9;
+  color:#08734f;
+  padding:9px;
+  border-radius:9px;
+}
+.wrong{
+  background:#ffe4e7;
+  color:#a52d3c;
+  padding:9px;
+  border-radius:9px;
+}
+svg{
+  max-width:100%;
+  height:auto;
+}
+small{color:#687792}
+
+/* タブレット・スマートフォン向け */
+@media (max-width:800px){
+  body{
+    margin:0 auto;
+    padding:10px;
+  }
+  h1{font-size:24px}
+  #game{padding:14px}
+  #diagram{
+    height:auto;
+    min-height:175px;
+  }
+  #diagram svg{
+    width:100%;
+    height:auto;
+    max-height:210px;
+  }
+  #question{font-size:18px}
+  #answerInput,button{
+    display:block;
+    width:100%;
+    min-height:52px;
+    margin:7px 0;
+    font-size:18px;
+  }
+}
+</style>
+</head>
+
+<body>
+<h1>ロケット回路クイズ</h1>
+
+<div id="game">
+  <div id="track">
+    <span class="star" style="left:10%;top:15%">★</span>
+    <span class="star" style="left:32%;top:42%">✦</span>
+    <span class="star" style="left:63%;top:16%">★</span>
+    <span class="star" style="left:82%;top:40%">✦</span>
+
+    <div id="rocket">🚀</div>
+    <span class="obstacle" data-clear="3" style="left:27%">☄️</span>
+    <span class="obstacle" data-clear="6" style="left:53%">🪨</span>
+    <span class="obstacle" data-clear="9" style="left:78%">☄️</span>
+    <div id="goal">🌕</div>
+  </div>
+
+  <p id="stage"></p>
+  <div id="diagram"></div>
+  <p id="question"></p>
+
+  <input
+    id="answerInput"
+    type="number"
+    step="1"
+    inputmode="numeric"
+    placeholder="整数で入力"
+    aria-label="答えを整数で入力"
+  >
+  <button id="checkButton">判定</button>
+  <button id="nextButton" disabled>次の問題</button>
+  <button id="resetButton" hidden>1問目に戻る</button>
+
+  <p id="message" aria-live="polite"></p>
+  <p id="explain">正解すると解説が表示されます。</p>
+</div>
+
+<script>
+let score=0;
+let answer=0;
+let explanation="";
+let judged=false;
+let numberBag=[];
+let pairBag=[];
+let lastNumber=null;
+
+const $=selector=>document.querySelector(selector);
+const diagram=$("#diagram");
+const question=$("#question");
+const input=$("#answerInput");
+const message=$("#message");
+const explain=$("#explain");
+const stage=$("#stage");
+const rocket=$("#rocket");
+const checkButton=$("#checkButton");
+const nextButton=$("#nextButton");
+const resetButton=$("#resetButton");
+
+function shuffle(array){
+  for(let i=array.length-1;i>0;i--){
+    const j=Math.floor(Math.random()*(i+1));
+    [array[i],array[j]]=[array[j],array[i]];
+  }
+  return array;
+}
+
+/* 候補を使い切るまで同じ数字を取り出さない */
+function drawNumber(){
+  if(numberBag.length===0){
+    numberBag=shuffle([2,3,4,5,6,7,8,9,10,11,12]);
+
+    // 前の袋の最後と、次の袋の最初が同じにならないようにする
+    const lastIndex=numberBag.length-1;
+    if(numberBag[lastIndex]===lastNumber){
+      [numberBag[0],numberBag[lastIndex]]=
+        [numberBag[lastIndex],numberBag[0]];
+    }
+  }
+  lastNumber=numberBag.pop();
+  return lastNumber;
+}
+
+/* 抵抗値が異なり、並列合成抵抗が整数になる組 */
+const parallelPairs=[
+  [3,6],[4,12],[6,12],[8,24],[10,15],
+  [6,30],[9,18],[12,36],[10,40],[15,30]
+];
+
+function drawPair(){
+  if(pairBag.length===0){
+    pairBag=shuffle(parallelPairs.slice());
+  }
+  return pairBag.pop();
+}
+
+function resistor(x,y,text){
+  return `<rect x="${x}" y="${y}" width="60" height="28"
+    fill="white" stroke="#24324a" stroke-width="3"/>
+    <text x="${x+7}" y="${y+20}" font-size="15">${text}</text>`;
+}
+
+function battery(){
+  return `<path d="M40 40V78 M40 110V160
+    M27 82H53 M33 106H47"
+    fill="none" stroke="#24324a" stroke-width="3"/>`;
+}
+
+function oneResistor(r){
+  return `<svg viewBox="0 0 420 200" width="420" height="200">
+    ${battery()}
+    <path d="M40 40H145 M205 40H370V160H40"
+      fill="none" stroke="#24324a" stroke-width="3"/>
+    ${resistor(145,26,r)}
+  </svg>`;
+}
+
+function seriesCircuit(r1,r2){
+  return `<svg viewBox="0 0 420 200" width="420" height="200">
+    ${battery()}
+    <path d="M40 40H85 M145 40H175 M235 40H370V160H40"
+      fill="none" stroke="#24324a" stroke-width="3"/>
+    ${resistor(85,26,r1+"Ω")}
+    ${resistor(175,26,r2+"Ω")}
+  </svg>`;
+}
+
+/* 左で分岐し、右で合流する並列回路 */
+function parallelCircuit(r1,r2){
+  return `<svg viewBox="0 0 420 220" width="420" height="220">
+    ${battery()}
+    <path d="M40 40H100V110
+             M100 40H145 M205 40H350
+             M100 110H145 M205 110H350
+             M350 40V160H40"
+      fill="none" stroke="#24324a" stroke-width="3"/>
+    ${resistor(145,26,r1+"Ω")}
+    ${resistor(145,96,r2+"Ω")}
+    <circle cx="100" cy="40" r="4" fill="#24324a"/>
+    <circle cx="350" cy="40" r="4" fill="#24324a"/>
+  </svg>`;
+}
+
+/* R1と、R2・R3の並列部分からなる混合回路 */
+function mixedCircuit(r1,r2,r3){
+  return `<svg viewBox="0 0 440 220" width="440" height="220">
+    ${battery()}
+    <path d="M40 40H85
+             M145 40H200V110
+             M200 40H230 M290 40H350
+             M200 110H230 M290 110H350
+             M350 40V160H40"
+      fill="none" stroke="#24324a" stroke-width="3"/>
+    ${resistor(85,26,r1+"Ω")}
+    ${resistor(230,26,r2+"Ω")}
+    ${resistor(230,96,r3+"Ω")}
+    <circle cx="200" cy="40" r="4" fill="#24324a"/>
+    <circle cx="350" cy="40" r="4" fill="#24324a"/>
+  </svg>`;
+}
+
+function updateProgress(){
+  rocket.style.left=(2+score*8.5)+"%";
+
+  stage.textContent=score>=10
+    ?"ゴール！月に到着！"
+    :`第${score+1}問／全10問`;
+
+  document.querySelectorAll(".obstacle").forEach(obstacle=>{
+    obstacle.classList.toggle(
+      "gone",
+      score>=Number(obstacle.dataset.clear)
+    );
+  });
+
+  resetButton.hidden=score<10;
+}
+
+function resetQuestion(){
+  judged=false;
+  input.value="";
+  message.textContent="";
+  message.className="";
+  explain.textContent="正解すると解説が表示されます。";
+  checkButton.disabled=false;
+  nextButton.disabled=true;
+}
+
+function setQuestion(){
+  if(score>=10)return;
+  resetQuestion();
+
+  if(score===0){
+    const r=drawNumber(),i=drawNumber();
+    answer=r*i;
+    diagram.innerHTML=oneResistor(r+"Ω");
+    question.innerHTML=
+      `抵抗 ${r}Ω に ${i}A の電流が流れています。電圧は？<br><small>単位：V</small>`;
+    explanation=
+      `電圧＝電流×抵抗<br>${i}A×${r}Ω＝${answer}V`;
+  }
+
+  else if(score===1){
+    const r=drawNumber(),i=drawNumber(),v=r*i;
+    answer=i;
+    diagram.innerHTML=oneResistor(r+"Ω");
+    question.innerHTML=
+      `抵抗 ${r}Ω に ${v}V の電圧を加えます。電流は？<br><small>単位：A</small>`;
+    explanation=
+      `電流＝電圧÷抵抗<br>${v}V÷${r}Ω＝${answer}A`;
+  }
+
+  else if(score===2){
+    const r=drawNumber(),i=drawNumber(),v=r*i;
+    answer=r;
+    diagram.innerHTML=oneResistor("R");
+    question.innerHTML=
+      `電圧 ${v}V、電流 ${i}A のとき、抵抗は？<br><small>単位：Ω</small>`;
+    explanation=
+      `抵抗＝電圧÷電流<br>${v}V÷${i}A＝${answer}Ω`;
+  }
+
+  else if(score===3){
+    const [r1,r2]=drawPair();
+    answer=r1*r2/(r1+r2);
+    diagram.innerHTML=parallelCircuit(r1,r2);
+    question.innerHTML=
+      `並列回路の合成抵抗は？<br><small>単位：Ω</small>`;
+    explanation=
+      `合成抵抗＝(${r1}×${r2})÷(${r1}＋${r2})＝${answer}Ω`;
+  }
+
+  else if(score===4){
+    const r1=drawNumber(),r2=drawNumber();
+    answer=r1+r2;
+    diagram.innerHTML=seriesCircuit(r1,r2);
+    question.innerHTML=
+      `直列回路の合成抵抗は？<br><small>単位：Ω</small>`;
+    explanation=
+      `直列回路では抵抗を足します。<br>${r1}Ω＋${r2}Ω＝${answer}Ω`;
+  }
+
+  else if(score===5){
+    const r1=drawNumber(),r2=drawNumber(),i=drawNumber();
+    const v=r1*i;
+    answer=i;
+    diagram.innerHTML=parallelCircuit(r1,r2);
+    question.innerHTML=
+      `電源電圧は ${v}V。上側の ${r1}Ωに流れる電流は？<br><small>単位：A</small>`;
+    explanation=
+      `並列回路の各枝の電圧は電源電圧と同じです。<br>${v}V÷${r1}Ω＝${answer}A`;
+  }
+
+  else if(score===6){
+    const r1=drawNumber(),r2=drawNumber();
+    const v=r1*r2;
+    answer=r1+r2;
+    diagram.innerHTML=parallelCircuit(r1,r2);
+    question.innerHTML=
+      `電源電圧は ${v}V。電源から流れる全電流は？<br><small>単位：A</small>`;
+    explanation=
+      `上側：${v}V÷${r1}Ω＝${r2}A<br>
+       下側：${v}V÷${r2}Ω＝${r1}A<br>
+       全電流＝${answer}A`;
+  }
+
+  else if(score===7){
+    const r1=drawNumber(),[r2,r3]=drawPair();
+    const rp=r2*r3/(r2+r3);
+    answer=r1+rp;
+    diagram.innerHTML=mixedCircuit(r1,r2,r3);
+    question.innerHTML=
+      `混合回路の合成抵抗は？<br><small>単位：Ω</small>`;
+    explanation=
+      `並列部分：${r2}×${r3}÷(${r2}＋${r3})＝${rp}Ω<br>
+       ${r1}Ω＋${rp}Ω＝${answer}Ω`;
+  }
+
+  else if(score===8){
+    const r1=drawNumber(),[r2,r3]=drawPair();
+    const rp=r2*r3/(r2+r3);
+    const totalR=r1+rp;
+    const i=drawNumber();
+    const v=totalR*i;
+    answer=i;
+    diagram.innerHTML=mixedCircuit(r1,r2,r3);
+    question.innerHTML=
+      `電源電圧は ${v}V。電源から流れる全電流は？<br><small>単位：A</small>`;
+    explanation=
+      `合成抵抗＝${totalR}Ω<br>${v}V÷${totalR}Ω＝${answer}A`;
+  }
+
+  else{
+    const r1=drawNumber(),[r2,r3]=drawPair();
+
+    // 各枝の電流・電圧が整数になるように設定
+    const gcd=(a,b)=>b===0?a:gcd(b,a%b);
+    const branchV=(r2*r3/gcd(r2,r3))*2;
+    const i2=branchV/r2;
+    const i3=branchV/r3;
+    const totalI=i2+i3;
+    const sourceV=branchV+r1*totalI;
+
+    answer=i3;
+    diagram.innerHTML=mixedCircuit(r1,r2,r3);
+    question.innerHTML=
+      `電源電圧は ${sourceV}V。下側の ${r3}Ωに流れる電流は？<br><small>単位：A</small>`;
+    explanation=
+      `全電流は${totalI}A。${r1}Ωでの電圧降下は
+       ${r1}×${totalI}＝${r1*totalI}V。<br>
+       並列部分の電圧は${sourceV}－${r1*totalI}＝${branchV}V。<br>
+       下側の電流は${branchV}V÷${r3}Ω＝${answer}A`;
+  }
+
+  updateProgress();
+}
+
+function checkAnswer(){
+  if(judged||score>=10)return;
+
+  if(input.value===""){
+    message.textContent="数値を入力してください。";
+    return;
+  }
+
+  if(Number(input.value)===answer){
+    judged=true;
+    score++;
+
+    message.textContent=score===10
+      ?"正解！ミッションクリア！"
+      :"正解！ロケット前進！";
+    message.className="correct";
+
+    explain.innerHTML="<b>解説</b><br>"+explanation;
+    checkButton.disabled=true;
+    nextButton.disabled=score===10;
+
+    updateProgress();
+
+    if(score===10){
+      question.innerHTML=
+        "全10問クリア！ロケットが月に到着しました！";
+    }
+  }else{
+    message.textContent=
+      "おしい！答えは表示されません。もう一度考えよう。";
+    message.className="wrong";
+    explain.textContent=
+      "ヒント：回路のつなぎ方と、オームの法則を確認しよう。";
+  }
+}
+
+checkButton.addEventListener("click",checkAnswer);
+nextButton.addEventListener("click",setQuestion);
+
+resetButton.addEventListener("click",()=>{
+  score=0;
+  answer=0;
+  judged=false;
+  numberBag=[];
+  pairBag=[];
+  lastNumber=null;
+  setQuestion();
+});
+
+input.addEventListener("keydown",event=>{
+  if(event.key==="Enter")checkAnswer();
+});
+
+setQuestion();
+</script>
+</body>
+</html>
